@@ -1,0 +1,13 @@
+from prefect import flow, task
+import subprocess
+import sys
+
+@task
+def run_producer():
+    print("📤 Starting Kafka Producer...", flush=True)
+    subprocess.Popen(["python3", "../../kafka_producer.py"])
+    print("✅ Kafka Producer running in background.", flush=True)
+
+@flow(name="Kafka Producer Flow")
+def producer_flow():
+    run_producer()

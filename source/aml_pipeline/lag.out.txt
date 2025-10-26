@@ -1,0 +1,26 @@
+
+🔍 Checking offsets for:
+   • Group : aml_pipeline_consumer
+   • Topic : usdc-transactions
+   • Broker: 192.168.0.4:9092
+----------------------------------------------------------------------------------------------------------------------------------
+GROUP                      TOPIC             PARTITION  CURRENT-OFFSET     LOG-END-OFFSET     LAG        CLIENT-ID            HOST
+----------------------------------------------------------------------------------------------------------------------------------
+aml_pipeline_consumer     usdc-transactions 7          923019             949532             26513      rdkafka-fb314ecc-66b2-4e2b-b24f-2332a21226d8 /192.168.0.4
+  🚨 Lag exceeds 1000!
+aml_pipeline_consumer     usdc-transactions 3          922074             948769             26695      rdkafka-8da17235-1bf5-40a8-85c0-e363432a98f2 /192.168.0.4
+  🚨 Lag exceeds 1000!
+aml_pipeline_consumer     usdc-transactions 4          921427             948069             26642      rdkafka-96779958-65b5-44c2-81ac-e622852cd6c9 /192.168.0.4
+  🚨 Lag exceeds 1000!
+aml_pipeline_consumer     usdc-transactions 5          924045             950307             26262      rdkafka-ba085707-580e-403e-8348-2b4ad863dfa2 /192.168.0.4
+  🚨 Lag exceeds 1000!
+aml_pipeline_consumer     usdc-transactions 0          943438             969894             26456      rdkafka-19fd8b8c-70b7-47ae-9b1a-c7fa2b94ec9c /192.168.0.4
+  🚨 Lag exceeds 1000!
+aml_pipeline_consumer     usdc-transactions 6          921862             948134             26272      rdkafka-d5243c6a-4d1d-4131-a791-527a6191a740 /192.168.0.4
+  🚨 Lag exceeds 1000!
+aml_pipeline_consumer     usdc-transactions 2          944528             971106             26578      rdkafka-8a592b96-651f-43e3-bdc2-4c8c59bb3ad0 /192.168.0.4
+  🚨 Lag exceeds 1000!
+aml_pipeline_consumer     usdc-transactions 1          943006             969507             26501      rdkafka-698152c9-7801-4d07-a35c-d8e0047704b2 /192.168.0.4
+  🚨 Lag exceeds 1000!
+----------------------------------------------------------------------------------------------------------------------------------
+✅ Offset check complete.

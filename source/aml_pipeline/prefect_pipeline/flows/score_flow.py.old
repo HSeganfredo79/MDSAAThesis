@@ -1,0 +1,15 @@
+from prefect import flow, task
+import subprocess
+import sys
+
+@task
+def run_score(date: str):
+    print(f"📊 Scoring started for date {date}", flush=True)
+    result = subprocess.run(["python3", "../../score.py", "", date])
+    if result.returncode != 0:
+        raise RuntimeError("❌ Scoring failed")
+    print("✅ Scoring completed", flush=True)
+
+@flow(name="Daily Scoring")
+def score_flow(date: str):
+    run_score(date)

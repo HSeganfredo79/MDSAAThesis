@@ -1,0 +1,20 @@
+{
+    "METADATA_SPEC_VERSION": "SINGLE_TABLE_V1",
+    "columns": {
+        "amount": {
+            "sdtype": "numerical"
+        },
+        "from_pagerank": {
+            "sdtype": "numerical"
+        },
+        "to_pagerank": {
+            "sdtype": "numerical"
+        },
+        "from_centrality": {
+            "sdtype": "numerical"
+        },
+        "to_centrality": {
+            "sdtype": "numerical"
+        }
+    }
+}

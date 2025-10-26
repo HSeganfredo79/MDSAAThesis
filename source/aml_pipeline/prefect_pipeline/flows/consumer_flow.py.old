@@ -1,0 +1,13 @@
+from prefect import flow, task
+import subprocess
+import sys
+
+@task
+def run_consumer():
+    print("🔄 Starting Kafka Consumer...", flush=True)
+    subprocess.Popen(["python3", "../../kafka_consumer.py"])
+    print("✅ Kafka Consumer running in background.", flush=True)
+
+@flow(name="Kafka Consumer Flow")
+def consumer_flow():
+    run_consumer()

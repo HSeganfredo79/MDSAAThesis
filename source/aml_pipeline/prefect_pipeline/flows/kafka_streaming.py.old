@@ -1,0 +1,23 @@
+from prefect import flow, task
+import subprocess
+
+@task
+def start_producer():
+    print("🚀 Starting Kafka Producer...", flush=True)
+    subprocess.Popen(["python3", "../../kafka_producer.py"])
+    print("✅ Kafka Producer launched in background.", flush=True)
+
+@task
+def start_consumer():
+    print("🚀 Starting Kafka Consumer...", flush=True)
+    subprocess.Popen(["python3", "../../kafka_consumer.py"])
+    print("✅ Kafka Consumer launched in background.", flush=True)
+
+@flow(name="Kafka Streaming Loop")
+def kafka_streaming_flow():
+    start_producer()
+    start_consumer()
+
+# Only for local testing, not for Prefect runs
+if __name__ == "__main__":
+    kafka_streaming_flow()

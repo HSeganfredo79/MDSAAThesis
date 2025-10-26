@@ -1,0 +1,17 @@
+# flows/consumer_flow.py
+from prefect import flow, task
+from pathlib import Path
+import subprocess, os
+from flows.utils import project_root
+
+@task
+def start_consumer():
+    root = project_root()
+    log_dir = Path("/var/log/aml_pipeline"); log_dir.mkdir(parents=True, exist_ok=True)
+    cmd = ["python3", str(root / "kafka_consumer.py")]
+    subprocess.Popen(cmd, cwd=str(root), stdout=open(log_dir/"kafka_consumer.log","ab"), stderr=subprocess.STDOUT)
+    print("✅ Kafka Consumer launched.")
+
+@flow(name="Kafka Consumer")
+def consumer_flow():
+    start_consumer()

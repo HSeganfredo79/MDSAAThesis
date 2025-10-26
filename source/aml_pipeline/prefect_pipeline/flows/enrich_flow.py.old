@@ -1,0 +1,15 @@
+from prefect import flow, task
+import subprocess
+import sys
+
+@task
+def run_enrich(date: str):
+    print(f"📦 Enrichment started for date {date}", flush=True)
+    result = subprocess.run(["python3", "../../enrich.py", "", date])
+    if result.returncode != 0:
+        raise RuntimeError("❌ Enrichment failed")
+    print("✅ Enrichment completed", flush=True)
+
+@flow(name="Daily Enrichment")
+def enrich_flow(date: str):
+    run_enrich(date)

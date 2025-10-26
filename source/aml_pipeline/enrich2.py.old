@@ -1,0 +1,239 @@
+""" enrich2.py
+New enrichment pipeline that *adds* funneling and smurfing features to Transactions
+while leaving existing enrichment features untouched.
+
+Design goals / notes:
+- This script runs independently from enrich.py and writes new fields:
+    tx.funneling_score_v2
+    tx.funneling_multiple_senders_v2 (int)
+    tx.smurfing_score_v2
+    tx.smurfing_small_tx_count_v2 (int)
+    tx.enriched_v2_at (timestamp)
+- It still optionally computes pagerank/centrality if wanted, but this code
+  does NOT modify the existing tx.from_pagerank/to_pagerank fields to avoid any
+  change to the current feature set.
+- Time window and thresholds are configurable at top-level constants.
+ """
+...
+import os
+import logging
+import math
+import json
+from datetime import datetime, timedelta
+from neo4j import GraphDatabase
+import numpy as np
+import networkx as nx
+
+# ----------------- CONFIG -----------------
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://192.168.0.5:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASS = os.getenv("NEO4J_PASS", "PotatoDTND12!")
+
+# Time window (in seconds) used to compute funneling/smurfing context (e.g., 1 day)
+WINDOW_SECONDS = int(os.getenv("ENRICH2_WINDOW_SECONDS", 24 * 3600))
+
+# Smurfing threshold: tx amounts <= this value considered 'small' for structuring detection
+SMURFING_AMOUNT_THRESHOLD = float(os.getenv("ENRICH2_SMURFING_AMOUNT_THRESHOLD", 1000.0))
+
+# If recipient receives >= this many distinct senders within the window -> funneling candidate
+FUNNELING_DISTINCT_SENDER_THRESHOLD = int(os.getenv("ENRICH2_FUNNELING_SENDER_THRESH", 5))
+
+LOG_DIR = os.getenv("LOG_DIR", "/var/log/aml_pipeline")
+os.makedirs(LOG_DIR, exist_ok=True)
+logging.basicConfig(
+    filename=os.path.join(LOG_DIR, "enrich2.log"),
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
+
+driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
+
+# ----------------- HELPERS / ALGORITHMS -----------------
+def parse_input_date():
+    """
+    Returns (window_start_ts, window_end_ts) as epoch seconds.
+    Accepts optional CLI arg: YYYYMMDD (target day, no hyphens). If omitted, uses yesterday.
+    """
+    import sys
+    if len(sys.argv) >= 2:
+        raw = sys.argv[1].strip()
+        if not (len(raw) == 8 and raw.isdigit()):
+            raise SystemExit(f"Invalid date '{raw}'. Use YYYYMMDD (no hyphens).")
+        dt = datetime.strptime(raw, "%Y%m%d")
+    else:
+        # default: day before now (full 24h)
+        dt = datetime.utcnow() - timedelta(days=1)
+    start = datetime(dt.year, dt.month, dt.day)
+    end = start + timedelta(days=1)
+    return int(start.timestamp()), int(end.timestamp())
+
+def compute_funneling_features(tx_rows):
+    """
+    tx_rows: list of dicts with keys: transaction_id, from_address, to_address, amount, timestamp
+    Returns per-transaction funneling features dict keyed by transaction_id.
+    Funneling idea:
+      - If a recipient receives many distinct senders in the window, each tx into that recipient
+        gets a higher 'funneling_score_v2'.
+      - Score = normalized distinct_senders_count * log(total_amount_to_recipient + 1)
+    """
+    # Aggregate per recipient
+    recipient_map = {}
+    for r in tx_rows:
+        to_addr = r["to_address"]
+        recipient_map.setdefault(to_addr, {"senders": set(), "total_amount": 0.0, "tx_ids": []})
+        recipient_map[to_addr]["senders"].add(r["from_address"])
+        recipient_map[to_addr]["total_amount"] += float(r["amount"])
+        recipient_map[to_addr]["tx_ids"].append(r["transaction_id"])
+
+    # Compute normalized scores
+    # We'll scale distinct sender counts by a softmax-like transform to avoid unboundedness.
+    scores = {}
+    max_senders = max((len(v["senders"]) for v in recipient_map.values()), default=1)
+    for to_addr, info in recipient_map.items():
+        distinct = len(info["senders"])
+        # normalized_sender = distinct / max_senders  -> in [0,1]
+        normalized_sender = distinct / max_senders if max_senders > 0 else 0.0
+        amount_term = math.log1p(info["total_amount"])
+        # funneling_score_v2 in [0, 1.0 * log-scale]; scale to 0..1 via sigmoid-like mapping
+        raw = normalized_sender * amount_term
+        funnel_score = 1.0 / (1.0 + math.exp(-0.5 * (raw - 1.0)))  # centered, gentle slope
+        for txid in info["tx_ids"]:
+            scores[txid] = {
+                "funneling_score_v2": round(float(funnel_score), 6),
+                "funneling_multiple_senders_v2": distinct
+            }
+    return scores
+
+def compute_smurfing_features(tx_rows):
+    """
+    Smurfing detection (structuring):
+      - For each sender, count how many 'small' transactions (<= threshold) they made within the window.
+      - For each tx, derive a smurfing_score_v2 as a function of:
+          count_small_tx_by_sender (higher => more suspicious),
+          fraction_small_tx_of_sender,
+          recipient repetition (same recipient many times may increase suspicion).
+    We return features per-transaction keyed by transaction_id.
+    """
+    sender_map = {}
+    for r in tx_rows:
+        fr = r["from_address"]
+        sender_map.setdefault(fr, {"txs": [], "small_count": 0, "total_amount": 0.0})
+        sender_map[fr]["txs"].append(r)
+        sender_map[fr]["total_amount"] += float(r["amount"])
+        if float(r["amount"]) <= SMURFING_AMOUNT_THRESHOLD:
+            sender_map[fr]["small_count"] += 1
+
+    features = {}
+    for sender, info in sender_map.items():
+        total = len(info["txs"])
+        small = info["small_count"]
+        frac_small = small / total if total > 0 else 0.0
+        # For recipient repetition: compute counts of recipient per sender
+        recip_counts = {}
+        for tx in info["txs"]:
+            r = tx["to_address"]
+            recip_counts[r] = recip_counts.get(r, 0) + 1
+        max_recip_repeat = max(recip_counts.values()) if recip_counts else 0
+
+        # Compose a smurfing score:
+        # - base = sigmoid of (frac_small * sqrt(small))
+        base = 1.0 / (1.0 + math.exp(-6.0 * (frac_small * math.sqrt(small) - 0.2)))
+        # - reward repeated recipients and small counts
+        repeat_boost = min(1.0, max_recip_repeat / max(1, total))  # 0..1
+        raw_score = base * (0.7 + 0.3 * repeat_boost)
+        for tx in info["txs"]:
+            features[tx["transaction_id"]] = {
+                "smurfing_score_v2": round(float(raw_score), 6),
+                "smurfing_small_tx_count_v2": small
+            }
+    return features
+
+# ----------------- NEO4J IO -----------------
+def fetch_transactions_for_window(tx, start_ts, end_ts, sample_limit=None):
+    """
+    Fetch minimal fields needed for computing funneling/smurfing.
+    Keep this query lightweight (only basic columns).
+    """
+    q = f"""
+    MATCH (from_wallet:Wallet)-[:SENT]->(tx:Transaction)-[:RECEIVED_BY]->(to_wallet:Wallet)
+    WHERE tx.consumed_at IS NOT NULL AND tx.timestamp >= $start_ts AND tx.timestamp < $end_ts
+    RETURN elementId(tx) AS eid,
+        tx.transaction_id AS transaction_id,
+        tx.amount        AS amount,
+        tx.timestamp     AS timestamp,
+        from_wallet.address AS from_address,
+        to_wallet.address   AS to_address
+    """
+    if sample_limit:
+        q += f" LIMIT {int(sample_limit)}"
+    results = tx.run(q, start_ts=start_ts, end_ts=end_ts)
+    rows = []
+    for r in results:
+        rows.append({
+            "transaction_id": r["transaction_id"],
+            "amount": float(r["amount"]),
+            "timestamp": int(r["timestamp"]),
+            "from_address": r["from_address"],
+            "to_address": r["to_address"]
+        })
+    return rows
+
+def write_enrichment_v2(tx, rows):
+    """
+    Write back the v2 enrichment fields in batches.
+    We keep fields names suffixed with _v2 so existing pipeline is untouched.
+    Also set a tx.enriched_v2_at timestamp for auditing.
+    """
+    #(t:Transaction {transaction_id: r.transaction_id})
+    query = """
+    UNWIND $rows AS r
+    MATCH (t:Transaction)
+    WHERE elementId(t) = r.eid
+    SET t.funneling_score_v2 = r.funneling_score_v2,
+        t.funneling_multiple_senders_v2 = r.funneling_multiple_senders_v2,
+        t.smurfing_score_v2 = r.smurfing_score_v2,
+        t.smurfing_small_tx_count_v2 = r.smurfing_small_tx_count_v2,
+        t.enriched_v2_at = r.enriched_v2_at
+    """
+    tx.run(query, rows=rows)
+
+# ----------------- MAIN FLOW -----------------
+def run_enrich2():
+    start_ts, end_ts = parse_input_date()
+    logging.info("Starting enrich2 for window %s - %s", start_ts, end_ts)
+    with driver.session() as session:
+        tx_rows = session.read_transaction(fetch_transactions_for_window, start_ts, end_ts, None)
+        if not tx_rows:
+            logging.info("No transactions found for window; exiting")
+            return
+        # Compute new features
+        funnel_map = compute_funneling_features(tx_rows)
+        smurf_map = compute_smurfing_features(tx_rows)
+
+        # Merge per-tx and prepare for batch write
+        batch = []
+        now_ts = int(datetime.utcnow().timestamp())
+        for r in tx_rows:
+            txid = r["transaction_id"]
+            f = funnel_map.get(txid, {"funneling_score_v2": 0.0, "funneling_multiple_senders_v2": 0})
+            s = smurf_map.get(txid, {"smurfing_score_v2": 0.0, "smurfing_small_tx_count_v2": 0})
+            batch.append({
+                "transaction_id": txid,
+                "funneling_score_v2": float(f["funneling_score_v2"]),
+                "funneling_multiple_senders_v2": int(f["funneling_multiple_senders_v2"]),
+                "smurfing_score_v2": float(s["smurfing_score_v2"]),
+                "smurfing_small_tx_count_v2": int(s["smurfing_small_tx_count_v2"]),
+                "enriched_v2_at": now_ts
+            })
+
+        # Write in chunks to avoid huge transactions
+        BATCH = 500
+        for i in range(0, len(batch), BATCH):
+            chunk = batch[i:i+BATCH]
+            session.write_transaction(write_enrichment_v2, chunk)
+            logging.info("Wrote enrichment chunk %d/%d", i//BATCH + 1, math.ceil(len(batch)/BATCH))
+
+        logging.info("✅ enrich2+ finished; enriched %d transactions", len(batch))
+
+if __name__ == "__main__":
+    run_enrich2()

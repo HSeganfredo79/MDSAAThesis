@@ -1,0 +1,35 @@
+from ydata_synthetic.synthesizers.regular import RegularSynthesizer
+from sklearn.preprocessing import MinMaxScaler
+import pandas as pd
+
+# Create a simple dummy dataframe
+df = pd.DataFrame({
+    'amount': [100, 200, 300, 400],
+    'from_pagerank': [0.1, 0.2, 0.1, 0.3],
+    'to_pagerank': [0.3, 0.1, 0.4, 0.2],
+    'from_centrality': [0.5, 0.4, 0.6, 0.3],
+    'to_centrality': [0.2, 0.6, 0.4, 0.3]
+})
+
+# Scale the data
+scaler = MinMaxScaler()
+scaled_data = scaler.fit_transform(df)
+
+# Define minimal model parameters
+model_parameters = {
+    'batch_size': 32,
+    'z_dim': 32,
+    'epochs': 50,
+    'learning_rate': 1e-4
+}
+
+# Initialize and fit GAN
+gan = RegularSynthesizer(modelname='vanillagan', model_parameters=model_parameters)
+gan.fit(scaled_data)
+
+# Sample synthetic data
+synthetic_data = gan.sample(n_samples=2)
+synthetic_df = pd.DataFrame(scaler.inverse_transform(synthetic_data), columns=df.columns)
+
+print("✅ Synthetic data generated successfully:")
+print(synthetic_df)

@@ -1,0 +1,15 @@
+from prefect import flow, task
+import subprocess
+import sys
+
+@task
+def run_monitor():
+    print("🧪 Running drift monitor...", flush=True)
+    result = subprocess.run(["python3", "../../monitor.py"])
+    if result.returncode != 0:
+        raise RuntimeError("❌ Drift monitor failed")
+    print("✅ Drift monitor completed", flush=True)
+
+@flow(name="Drift Monitor")
+def monitor_flow():
+    run_monitor()

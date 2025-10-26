@@ -1,0 +1,101 @@
+name: aml-pipeline
+prefect-version: ">=3.0.0"
+
+# Where your flow files live (adjust to your repo path)
+# Prefect Process worker will cd here before running the entrypoint.
+# If you don't want to pin it, you can remove working_dir from job_variables.
+deployments:
+  - name: enrich-daily
+    entrypoint: flows/enrich_flow.py:enrich_flow
+    parameters: {}   # flow will compute default date if not provided (see note below)
+    work_pool:
+      name: default-agent-pool
+      job_variables:
+        working_dir: /root/tese_henrique/aml_pipeline/prefect_pipeline
+        env:
+          AML_PIPELINE_HOME: /root/tese_henrique/aml_pipeline
+          PREFECT_API_URL: http://127.0.0.1:4200/api
+          PATH: /root/tese_henrique/aml_pipeline/.venv/bin:${PATH}
+    schedules:
+      - cron: "0 21 * * *"
+        timezone: "UTC"
+
+  - name: score-daily
+    entrypoint: flows/score_flow.py:score_flow
+    parameters: {}   # flow computes D-2 by default (see note below)
+    work_pool:
+      name: default-agent-pool
+      job_variables:
+        working_dir: /root/tese_henrique/aml_pipeline/prefect_pipeline
+        env:
+          AML_PIPELINE_HOME: /root/tese_henrique/aml_pipeline
+          PREFECT_API_URL: http://127.0.0.1:4200/api
+          PATH: /root/tese_henrique/aml_pipeline/.venv/bin:${PATH}
+    schedules:
+      - cron: "0 7 * * *"
+        timezone: "UTC"
+
+  - name: train-weekly
+    entrypoint: flows/train_flow.py:train_flow
+    parameters:
+      days_ago: 30
+    work_pool:
+      name: default-agent-pool
+      job_variables:
+        working_dir: /root/tese_henrique/aml_pipeline/prefect_pipeline
+        env:
+          AML_PIPELINE_HOME: /root/tese_henrique/aml_pipeline
+          PREFECT_API_URL: http://127.0.0.1:4200/api
+          PATH: /root/tese_henrique/aml_pipeline/.venv/bin:${PATH}
+    schedules:
+      - cron: "0 23 * * 0"
+        timezone: "UTC"
+
+  - name: drift-monitor
+    entrypoint: flows/monitor_flow.py:monitor_flow
+    parameters: {}
+    work_pool:
+      name: default-agent-pool
+      job_variables:
+        working_dir: /root/tese_henrique/aml_pipeline/prefect_pipeline
+        env:
+          AML_PIPELINE_HOME: /root/tese_henrique/aml_pipeline
+          PREFECT_API_URL: http://127.0.0.1:4200/api
+          PATH: /root/tese_henrique/aml_pipeline/.venv/bin:${PATH}
+    schedules:
+      - cron: "0 22 * * *"
+        timezone: "UTC"
+
+  # Long-running / manual (no schedules)
+  - name: kafka-producer
+    entrypoint: flows/producer_flow.py:producer_flow
+    work_pool:
+      name: default-agent-pool
+      job_variables:
+        working_dir: /root/tese_henrique/aml_pipeline/prefect_pipeline
+        env:
+          AML_PIPELINE_HOME: /root/tese_henrique/aml_pipeline
+          PREFECT_API_URL: http://127.0.0.1:4200/api
+          PATH: /root/tese_henrique/aml_pipeline/.venv/bin:${PATH}
+
+  - name: kafka-consumer
+    entrypoint: flows/consumer_flow.py:consumer_flow
+    work_pool:
+      name: default-agent-pool
+      job_variables:
+        working_dir: /root/tese_henrique/aml_pipeline/prefect_pipeline
+        env:
+          AML_PIPELINE_HOME: /root/tese_henrique/aml_pipeline
+          PREFECT_API_URL: http://127.0.0.1:4200/api
+          PATH: /root/tese_henrique/aml_pipeline/.venv/bin:${PATH}
+
+  - name: kafka-loop
+    entrypoint: flows/kafka_streaming.py:kafka_streaming_flow
+    work_pool:
+      name: default-agent-pool
+      job_variables:
+        working_dir: /root/tese_henrique/aml_pipeline/prefect_pipeline
+        env:
+          AML_PIPELINE_HOME: /root/tese_henrique/aml_pipeline
+          PREFECT_API_URL: http://127.0.0.1:4200/api
+          PATH: /root/tese_henrique/aml_pipeline/.venv/bin:${PATH}
